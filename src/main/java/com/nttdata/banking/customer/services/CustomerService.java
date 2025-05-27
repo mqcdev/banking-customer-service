@@ -1,23 +1,25 @@
 package com.nttdata.banking.customer.services;
 
-import com.nttdata.banking.customer.models.Customer;
+import com.nttdata.banking.customer.dto.request.CustomerRequestDTO;
+import com.nttdata.banking.customer.dto.response.CustomerResponseDTO;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 public interface CustomerService {
+    Mono<CustomerResponseDTO> create(CustomerRequestDTO requestDto);
 
-    Mono<Customer> save(Customer customer);
+    Flux<CustomerResponseDTO> findAll();
 
-    Flux<Customer> findAll();
+    Mono<CustomerResponseDTO> findById(String id);
 
-    Mono<Customer> findById(String id);
-
-    Mono<Customer> update(Customer customer);
+    Mono<CustomerResponseDTO> update(String id, CustomerRequestDTO requestDto);
 
     Mono<Void> deleteById(String id);
 
-    Mono<Customer> findByDocumentNumber(String documentNumber);
+    Mono<CustomerResponseDTO> findByEmail(String email);
 
-    Mono<Customer> findByRuc(String ruc);
+    Mono<CustomerResponseDTO> findByDocumentNumber(String documentNumber);
+
+    Flux<CustomerResponseDTO> findByActive();
 }
 

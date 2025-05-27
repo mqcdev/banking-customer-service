@@ -1,99 +1,176 @@
 package com.nttdata.banking.customer.services.impl;
 
-import com.nttdata.banking.customer.models.Customer;
+import com.nttdata.banking.customer.dto.request.CustomerRequestDTO;
+import com.nttdata.banking.customer.dto.response.CustomerResponseDTO;
+import com.nttdata.banking.customer.exception.CustomerNotFoundException;
+import com.nttdata.banking.customer.exception.DuplicateCustomerException;
+import com.nttdata.banking.customer.mapper.CustomerMapper;
 import com.nttdata.banking.customer.repositories.CustomerRepository;
 import com.nttdata.banking.customer.services.CustomerService;
+import com.nttdata.banking.customer.utils.CustomerValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.time.LocalDateTime;
-
-@Slf4j
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class CustomerServiceImpl implements CustomerService {
 
     private final CustomerRepository customerRepository;
+    private final CustomerMapper customerMapper;
+    private final CustomerValidator customerValidator;
 
     @Override
-    public Mono<Customer> save(Customer customer) {
-        log.info("Saving customer with document number: {}", customer.getDocumentNumber());
-        customer.setCreatedAt(LocalDateTime.now());
-        customer.setUpdatedAt(LocalDateTime.now());
-        customer.setActive(true);
-        return customerRepository.save(customer)
-                .doOnSuccess(savedCustomer ->
-                        log.info("Customer saved successfully with ID: {}", savedCustomer.getId()))
-                .doOnError(error ->
-                        log.error("Error saving customer: {}", error.getMessage()));
-    }
+    public Mono<CustomerResponseDTO> create(CustomerRequestDTO requestDto) {
+        log.info("Creating new customer with email: {}", requestDto.getEmail());
 
-    @Override
-    public Flux<Customer> findAll() {
-        log.info("Finding all customers");
-        return customerRepository.findAll()
-                .doOnComplete(() -> log.info("Retrieved all customers successfully"))
-                .doOnError(error ->
-                        log.error("Error retrieving customers: {}", error.getMessage()));
-    }
-
-    @Override
-    public Mono<Customer> findById(String id) {
-        log.info("Finding customer by ID: {}", id);
-        return customerRepository.findById(id)
-                .doOnSuccess(customer ->
-                        log.info("Customer found with ID: {}", id))
-                .doOnError(error ->
-                        log.error("Error finding customer by ID {}: {}", id, error.getMessage()));
-    }
-
-    @Override
-    public Mono<Customer> update(Customer customer) {
-        log.info("Updating customer with ID: {}", customer.getId());
-        return customerRepository.findById(customer.getId())
-                .flatMap(existingCustomer -> {
-                    customer.setCreatedAt(existingCustomer.getCreatedAt());
-                    customer.setUpdatedAt(LocalDateTime.now());
-                    return customerRepository.save(customer);
+        return Mono.just(requestDto)
+                .doOnNext(dto -> {
+                    log.debug("Validating customer request");
+                    customerValidator.validateCustomerRequest(dto);
                 })
-                .doOnSuccess(updatedCustomer ->
-                        log.info("Customer updated successfully with ID: {}", updatedCustomer.getId()))
-                .doOnError(error ->
-                        log.error("Error updating customer: {}", error.getMessage()));
+                .flatMap(this::validateUniqueFields)
+                .map(customerMapper::toEntity)
+                .flatMap(customerRepository::save)
+                .map(customerMapper::toResponseDto)
+                .doOnSuccess(response -> log.info("Customer created successfully with ID: {}", response.getId()))
+                .doOnError(error -> log.error("Error creating customer: {}", error.getMessage()));
+    }
+
+    @Override
+    public Flux<CustomerResponseDTO> findAll() {
+        log.info("Retrieving all customers");
+
+        return customerRepository.findAll()
+                .map(customerMapper::toResponseDto)
+                .doOnComplete(() -> log.info("Retrieved all customers successfully"))
+                .doOnError(error -> log.error("Error retrieving customers: {}", error.getMessage()));
+    }
+
+    @Override
+    public Mono<CustomerResponseDTO> findById(String id) {
+        log.info("Retrieving customer by ID: {}", id);
+
+        return customerRepository.findById(id)
+                .switchIfEmpty(Mono.error(new CustomerNotFoundException("Customer not found with ID: " + id)))
+                .map(customerMapper::toResponseDto)
+                .doOnSuccess(response -> log.info("Customer retrieved successfully: {}", id))
+                .doOnError(error -> log.error("Error retrieving customer {}: {}", id, error.getMessage()));
+    }
+
+    @Override
+    public Mono<CustomerResponseDTO> update(String id, CustomerRequestDTO requestDto) {
+        log.info("Updating customer with ID: {}", id);
+
+        return Mono.just(requestDto)
+                .doOnNext(dto -> {
+                    log.debug("Validating customer update request");
+                    customerValidator.validateCustomerRequest(dto);
+                })
+                .flatMap(dto -> validateUniqueFieldsForUpdate(id, dto))
+                .flatMap(dto -> customerRepository.findById(id)
+                        .switchIfEmpty(Mono.error(new CustomerNotFoundException("Customer not found with ID: " + id)))
+                        .doOnNext(existingCustomer -> customerMapper.updateEntityFromDto(dto, existingCustomer))
+                )
+                .flatMap(customerRepository::save)
+                .map(customerMapper::toResponseDto)
+                .doOnSuccess(response -> log.info("Customer updated successfully: {}", id))
+                .doOnError(error -> log.error("Error updating customer {}: {}", id, error.getMessage()));
     }
 
     @Override
     public Mono<Void> deleteById(String id) {
-        log.info("Deleting customer by ID: {}", id);
+        log.info("Deleting customer with ID: {}", id);
+
         return customerRepository.findById(id)
+                .switchIfEmpty(Mono.error(new CustomerNotFoundException("Customer not found with ID: " + id)))
                 .flatMap(customer -> customerRepository.deleteById(id))
-                .doOnSuccess(result ->
-                        log.info("Customer deleted successfully with ID: {}", id))
-                .doOnError(error ->
-                        log.error("Error deleting customer by ID {}: {}", id, error.getMessage()));
+                .doOnSuccess(unused -> log.info("Customer deleted successfully: {}", id))
+                .doOnError(error -> log.error("Error deleting customer {}: {}", id, error.getMessage()));
     }
 
     @Override
-    public Mono<Customer> findByDocumentNumber(String documentNumber) {
-        log.info("Finding customer by document number: {}", documentNumber);
+    public Mono<CustomerResponseDTO> findByEmail(String email) {
+        log.info("Retrieving customer by email: {}", email);
+
+        return customerRepository.findByEmail(email)
+                .switchIfEmpty(Mono.error(new CustomerNotFoundException("Customer not found with email: " + email)))
+                .map(customerMapper::toResponseDto)
+                .doOnSuccess(response -> log.info("Customer retrieved by email successfully: {}", email))
+                .doOnError(error -> log.error("Error retrieving customer by email {}: {}", email, error.getMessage()));
+    }
+
+    @Override
+    public Mono<CustomerResponseDTO> findByDocumentNumber(String documentNumber) {
+        log.info("Retrieving customer by document number: {}", documentNumber);
+
         return customerRepository.findByDocumentNumber(documentNumber)
-                .doOnSuccess(customer ->
-                        log.info("Customer found with document number: {}", documentNumber))
-                .doOnError(error ->
-                        log.error("Error finding customer by document number {}: {}",
-                                documentNumber, error.getMessage()));
+                .switchIfEmpty(Mono.error(new CustomerNotFoundException("Customer not found with document number: " + documentNumber)))
+                .map(customerMapper::toResponseDto)
+                .doOnSuccess(response -> log.info("Customer retrieved by document number successfully: {}", documentNumber))
+                .doOnError(error -> log.error("Error retrieving customer by document number {}: {}", documentNumber, error.getMessage()));
     }
 
     @Override
-    public Mono<Customer> findByRuc(String ruc) {
-        log.info("Finding customer by RUC: {}", ruc);
-        return customerRepository.findByRuc(ruc)
-                .doOnSuccess(customer ->
-                        log.info("Customer found with RUC: {}", ruc))
-                .doOnError(error ->
-                        log.error("Error finding customer by RUC {}: {}", ruc, error.getMessage()));
+    public Flux<CustomerResponseDTO> findByActive() {
+        log.info("Retrieving active customers");
+
+        return customerRepository.findByActiveTrue()
+                .map(customerMapper::toResponseDto)
+                .doOnComplete(() -> log.info("Retrieved active customers successfully"))
+                .doOnError(error -> log.error("Error retrieving active customers: {}", error.getMessage()));
+    }
+
+
+    private Mono<CustomerRequestDTO> validateUniqueFields(CustomerRequestDTO requestDto) {
+        return Mono.zip(
+                customerRepository.existsByEmail(requestDto.getEmail()),
+                customerRepository.existsByDocumentNumber(requestDto.getDocumentNumber()),
+                requestDto.getRuc() != null ? customerRepository.existsByRuc(requestDto.getRuc()) : Mono.just(false)
+        ).flatMap(tuple -> {
+            boolean emailExists = tuple.getT1();
+            boolean documentExists = tuple.getT2();
+            boolean rucExists = tuple.getT3();
+
+            if (emailExists) {
+                return Mono.error(new DuplicateCustomerException("Customer already exists with email: " + requestDto.getEmail()));
+            }
+            if (documentExists) {
+                return Mono.error(new DuplicateCustomerException("Customer already exists with document number: " + requestDto.getDocumentNumber()));
+            }
+            if (rucExists) {
+                return Mono.error(new DuplicateCustomerException("Customer already exists with RUC: " + requestDto.getRuc()));
+            }
+
+            return Mono.just(requestDto);
+        });
+    }
+
+
+    private Mono<CustomerRequestDTO> validateUniqueFieldsForUpdate(String id, CustomerRequestDTO requestDto) {
+        return Mono.zip(
+                customerRepository.existsByEmailAndIdNot(requestDto.getEmail(), id),
+                customerRepository.existsByDocumentNumberAndIdNot(requestDto.getDocumentNumber(), id),
+                requestDto.getRuc() != null ? customerRepository.existsByRucAndIdNot(requestDto.getRuc(), id) : Mono.just(false)
+        ).flatMap(tuple -> {
+            boolean emailExists = tuple.getT1();
+            boolean documentExists = tuple.getT2();
+            boolean rucExists = tuple.getT3();
+
+            if (emailExists) {
+                return Mono.error(new DuplicateCustomerException("Another customer already exists with email: " + requestDto.getEmail()));
+            }
+            if (documentExists) {
+                return Mono.error(new DuplicateCustomerException("Another customer already exists with document number: " + requestDto.getDocumentNumber()));
+            }
+            if (rucExists) {
+                return Mono.error(new DuplicateCustomerException("Another customer already exists with RUC: " + requestDto.getRuc()));
+            }
+
+            return Mono.just(requestDto);
+        });
     }
 }

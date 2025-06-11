@@ -1,6 +1,5 @@
 package com.nttdata.banking.customer.enums;
 
 public enum CustomerType {
-    PERSONAL,
-    BUSINESS,
+    PERSONAL, BUSINESS, VIP, PYME
 }
